@@ -37,41 +37,11 @@ jobs:
           gcc --version | head -1
           python3 -c "import numpy, scipy; print('  numpy', numpy.__version__, ' scipy', scipy.__version__)"
 
-      # CONTROL PREVIO. Me costo un intento entero descubrir que faltaba scipy,
-      # y solo se vio DESPUES de dos minutos de Monte Carlo. Aqui falla en 2
-      # segundos si falta algo, importando la cadena entera.
+      # CONTROL PREVIO. Me costo un intento entero descubrir que faltaba scipy, y
+      # solo se vio DESPUES de dos minutos de Monte Carlo. Esto falla en 2 s.
       - name: control previo de la cadena
-        run: |
-          set -e
-          L=upstream/liber-primus
-          PP="$L/src:$(find "$L" -name '*.py' -printf '%h\n' | sort -u | tr '\n' ':')"
-          [ -e "$L/analysis/data" ] || ln -s "$L/data" "$L/analysis/data"
-          env PYTHONPATH="$PP" python3 - <<'PY'
-          import sys
-          mod = ["numpy", "scipy", "runner", "driftbeam", "adjudicate", "hitfn20",
-                 "skipdecode", "gen28", "panelmax20", "lib_numchannel",
-                 "nullcurve19", "run_calibration"]
-          mal = []
-          for m in mod:
-              try:
-                  __import__(m)
-              except Exception as e:
-                  mal.append(f"{m}: {type(e).__name__}: {e}")
-          if mal:
-              print("CADENA INCOMPLETA:")
-              for x in mal: print("  -", x)
-              sys.exit(1)
-          print("cadena completa:", len(mod), "modulos importan")
-          PY
+        run: python3 bin/preflight.py upstream/liber-primus
 
-      # DOS VECES QUE ME COSTO ESTO, APUNTADO:
-#   1) actions/checkout con ref=<SHA> y fetch-depth:1 hace fetch de una ref que
-#      no existe y muere.
-#   2) con fetch-depth:0 tampoco: para OTRO repo, checkout solo acepta una rama
-#      o una etiqueta, y un SHA suelto da
-#      "A branch or tag with the name 'f08b20b' could not be found".
-# Asi que el clon va a mano: fetch directo por SHA, que GitHub si admite.
-# Probado en local: 128 s y 305 MB con --filter=blob:none.
       - name: clon del upstream (solo para leer las fuentes)
         run: |
           set -e
