@@ -91,6 +91,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {name: planes, path: planes}
 
+      # El binario pierde el bit de ejecucion al pasar por el artefacto (zip no
+      # guarda permisos). Sin esto, "./dist/grind28" da Permission denied (126).
+      - name: Permissions
+        run: chmod +x dist/grind28
+
       - name: comprobando la puerta de ESTA celda antes de contar nada
         run: |
           set -e
