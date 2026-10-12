@@ -35,6 +35,8 @@ export PYTHONPATH="$PP"
 py() { local d="$1"; shift; ( cd "$d" && timeout 3000 nice -n 15 env PYTHONPATH="$PP" python3 "$@" ); }
 
 echo "== 0) panel en su sitio =========================================="
+mkdir -p "$LP/analysis/round19/I2/models"   # models/ esta en el .gitignore del
+                                         # upstream: en un clon limpio NO existe
 cp -f "$PANEL" "$LP/analysis/round19/I2/models/panel.npz"
 sha256sum "$LP/analysis/round19/I2/models/panel.npz" | sed 's/^/   /'
 
