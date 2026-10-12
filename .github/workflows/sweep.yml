@@ -17,7 +17,7 @@ on:
 
 env:
   UPSTREAM: Dukotah/cicada3301
-  UPSTREAM_REF: f08b20b
+  UPSTREAM_REF: f08b20b632d91209ddbaa747e8e2f23df0c78ba1
 
 jobs:
   preparar:
@@ -36,17 +36,25 @@ jobs:
           php --version | head -1
           gcc --version | head -1
 
-      # OJO: con fetch-depth: 1 y un SHA suelto como ref, checkout hace
-      #   fetch +refs/heads/f08b20b*:refs/remotes/origin/f08b20b*
-      # que no existe y el job muere. Con fetch-depth: 0 sí puede traer el commit.
-      # Por eso el historial completo es OBLIGATORIO aqui, no opcional.
+      # DOS VECES QUE ME COSTO ESTO, APUNTADO:
+#   1) actions/checkout con ref=<SHA> y fetch-depth:1 hace fetch de una ref que
+#      no existe y muere.
+#   2) con fetch-depth:0 tampoco: para OTRO repo, checkout solo acepta una rama
+#      o una etiqueta, y un SHA suelto da
+#      "A branch or tag with the name 'f08b20b' could not be found".
+# Asi que el clon va a mano: fetch directo por SHA, que GitHub si admite.
+# Probado en local: 128 s y 305 MB con --filter=blob:none.
       - name: clon del upstream (solo para leer las fuentes)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.UPSTREAM }}
-          ref: ${{ env.UPSTREAM_REF }}
-          fetch-depth: 0
-          path: upstream
+        run: |
+          set -e
+          git init -q upstream
+          cd upstream
+          git remote add origin "https://github.com/${{ env.UPSTREAM }}.git"
+          git fetch --depth 1 --filter=blob:none origin "${{ env.UPSTREAM_REF }}"
+          git checkout -q FETCH_HEAD
+          echo "HEAD = $(git rev-parse HEAD)"
+          [ "$(git rev-parse HEAD)" = "${{ env.UPSTREAM_REF }}" ] \
+            || { echo "el SHA no coincide"; exit 1; }
 
       - name: comprobando que el clon trae lo que la cadena necesita
         run: |
