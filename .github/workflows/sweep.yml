@@ -37,11 +37,6 @@ jobs:
           gcc --version | head -1
           python3 -c "import numpy, scipy; print('  numpy', numpy.__version__, ' scipy', scipy.__version__)"
 
-      # CONTROL PREVIO. Me costo un intento entero descubrir que faltaba scipy, y
-      # solo se vio DESPUES de dos minutos de Monte Carlo. Esto falla en 2 s.
-      - name: control previo de la cadena
-        run: python3 bin/preflight.py upstream/liber-primus
-
       - name: clon del upstream (solo para leer las fuentes)
         run: |
           set -e
@@ -54,20 +49,12 @@ jobs:
           [ "$(git rev-parse HEAD)" = "${{ env.UPSTREAM_REF }}" ] \
             || { echo "el SHA no coincide"; exit 1; }
 
-      - name: comprobando que el clon trae lo que la cadena necesita
-        run: |
-          set -e
-          for f in analysis/round19/I3/calib19.json \
-                   analysis/round27/P0-spec/make_vectors.py \
-                   analysis/round27/P1-engine/export_data.py \
-                   analysis/round28/L4/grind28.c \
-                   analysis/round28/L4/make_gates.py \
-                   analysis/round28/L4/gen28.py \
-                   src/lp/score.py \
-                   data/krisyotam_runes.txt ; do
-            [ -f "upstream/liber-primus/$f" ] || { echo "FALTA $f"; exit 1; }
-          done
-          echo "todas las fuentes presentes"
+      # CONTROL PREVIO. Placement matters: DESPUES del clon, no antes. Ya lo
+      # ejecute antes una vez y fallo banalmente porque upstream/ aun no existia.
+      # Y me costo un intento entero descubrir que faltaba scipy, viniendo solo
+      # DESPUES de dos minutos de Monte Carlo. Esto lo coge al principio.
+      - name: control previo de la cadena
+        run: python3 bin/preflight.py upstream/liber-primus
 
       - name: motor + puertas
         run: bash bin/preparar.sh "$PWD/upstream/liber-primus" "$PWD/panel/panel.npz" "$PWD/work"
