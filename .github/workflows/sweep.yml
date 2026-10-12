@@ -1,0 +1,138 @@
+name: l4-sweep
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: "Trozos por celda (20 => ~1,2 h por job con 2 nucleos)"
+        required: false
+        default: "20"
+      cells:
+        description: "Celdas, separadas por coma. Solo las 'pair' tienen barra re-ajustada."
+        required: false
+        default: "L4-php_mt_scale-pair,L4-php_mt_mod-pair,L4-php_php_scale-pair"
+
+# El repo es PUBLICO, asi que los minutos de los runners estandar son gratis
+# (docs.github.com/en/billing/concepts/product-billing/github-actions).
+# El limite duro es 6 h por job, y por eso cada celda va troceada.
+
+env:
+  UPSTREAM: Dukotah/cicada3301
+  UPSTREAM_REF: f08b20b
+
+jobs:
+  preparar:
+    name: preparar (motor + 25 puertas)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      shards: ${{ steps.planes.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: dependencias
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq php gcc python3-numpy >/dev/null
+          php --version | head -1
+          gcc --version | head -1
+
+      - name: clon del upstream (solo para leer las fuentes)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ env.UPSTREAM_REF }}
+          path: upstream
+
+      - name: comprobando que el clon trae lo que la cadena necesita
+        run: |
+          set -e
+          for f in analysis/round19/I3/calib19.json \
+                   analysis/round27/P0-spec/make_vectors.py \
+                   analysis/round27/P1-engine/export_data.py \
+                   analysis/round28/L4/grind28.c \
+                   analysis/round28/L4/make_gates.py \
+                   analysis/round28/L4/gen28.py \
+                   src/lp/score.py \
+                   data/krisyotam_runes.txt ; do
+            [ -f "upstream/liber-primus/$f" ] || { echo "FALTA $f"; exit 1; }
+          done
+          echo "todas las fuentes presentes"
+
+      - name: motor + puertas
+        run: bash bin/preparar.sh "$PWD/upstream/liber-primus" "$PWD/panel/panel.npz" "$PWD/work"
+
+      - name: planes troceados
+        id: planes
+        run: |
+          python3 bin/planes.py work/dist work/planes "${{ inputs.shards }}" ${{ inputs.cells }}
+          echo "shards=${{ inputs.shards }}" >> "$GITHUB_OUTPUT"
+          ls work/planes | wc -l | sed 's/^/planes: /'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: work/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planes
+          path: work/planes
+
+  barrer:
+    name: ${{ matrix.celda }} trozo ${{ matrix.trozo }}
+    needs: preparar
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        celda: ["L4-php_mt_scale-pair", "L4-php_mt_mod-pair", "L4-php_php_scale-pair"]
+        trozo: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: dist, path: dist}
+      - uses: actions/download-artifact@v4
+        with: {name: planes, path: planes}
+
+      - name: comprobando la puerta de ESTA celda antes de contar nada
+        run: |
+          set -e
+          ./dist/grind28 --gate-check "dist/gates/cellgate_${{ matrix.celda }}.dat"
+
+      - name: barriendo
+        run: |
+          set -e
+          mkdir -p "run/${{ matrix.celda }}-${{ matrix.trozo }}"
+          # --seconds deja que el motor cierre y guarde ANTES del limite de 6 h,
+          # en vez de que lo maten y perder el checkpoint.
+          ./dist/grind28 \
+            --plan "planes/${{ matrix.celda }}__${{ matrix.trozo }}.json" \
+            --run-dir "run/${{ matrix.celda }}-${{ matrix.trozo }}" \
+            --threads 2 \
+            --seconds 19000 2>&1 | tee "sweep-${{ matrix.celda }}-${{ matrix.trozo }}.log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: res-${{ matrix.celda }}-${{ matrix.trozo }}
+          path: run/${{ matrix.celda }}-${{ matrix.trozo }}
+
+  informe:
+    name: INFORME
+    needs: barrer
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "res-*", path: res, merge-multiple: true}
+      - uses: actions/download-artifact@v4
+        with: {name: dist, path: dist}
+
+      - name: resumen
+        run: python3 bin/informe.py res dist
+
+      - name: recombinando el mejor pmax por celda
+        run: python3 bin/informe.py res dist --json > informe.json || true
+
+      - uses: actions/upload-artifact@v4
+        with: {name: informe, path: informe.json}

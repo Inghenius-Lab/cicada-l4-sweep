@@ -1,0 +1,6 @@
+work/
+upstream/
+dist/
+planes/
+run/
+*.log
