@@ -13,7 +13,11 @@ import os
 import sys
 
 DIST, OUT, NSHARDS = sys.argv[1], sys.argv[2], int(sys.argv[3])
-CELLS = sys.argv[4:]
+# GitHub Actions pasa inputs.cells como UN argumento con comas, no como varios.
+# Separo por comas aqui para que da igual como llegue.
+CELLS = [c.strip() for arg in sys.argv[4:] for c in arg.split(",") if c.strip()]
+if not CELLS:
+    raise SystemExit("no se paso ninguna celda")
 
 cells = json.load(open(os.path.join(DIST, "queued_cells.json")))
 by_name = {c["lane"]: c for c in cells}
@@ -37,7 +41,7 @@ for lane in CELLS:
         lane_plan["from"], lane_plan["to"] = a, b
         lane_plan["gate"] = os.path.join(
             DIST, "gates", os.path.basename(c["gate"]))
-        ruta = os.path.join(OUT, f"{lane}__{s:02d}.json")
+        ruta = os.path.join(OUT, f"{lane}__{s}.json")   # SIN ceros: coincide con la matriz
         with open(ruta, "w") as f:
             json.dump([lane_plan], f, indent=1)
         hechas.append((lane, s, a, b, b - a))
