@@ -36,11 +36,16 @@ jobs:
           php --version | head -1
           gcc --version | head -1
 
+      # OJO: con fetch-depth: 1 y un SHA suelto como ref, checkout hace
+      #   fetch +refs/heads/f08b20b*:refs/remotes/origin/f08b20b*
+      # que no existe y el job muere. Con fetch-depth: 0 sí puede traer el commit.
+      # Por eso el historial completo es OBLIGATORIO aqui, no opcional.
       - name: clon del upstream (solo para leer las fuentes)
         uses: actions/checkout@v4
         with:
           repository: ${{ env.UPSTREAM }}
           ref: ${{ env.UPSTREAM_REF }}
+          fetch-depth: 0
           path: upstream
 
       - name: comprobando que el clon trae lo que la cadena necesita
@@ -124,12 +129,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with: {pattern: "res-*", path: res, merge-multiple: true}
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with: {name: dist, path: dist}
 
       - name: resumen
-        run: python3 bin/informe.py res dist
+        run: python3 bin/informe.py res dist || echo "sin datos que resumir"
 
       - name: recombinando el mejor pmax por celda
         run: python3 bin/informe.py res dist --json > informe.json || true
