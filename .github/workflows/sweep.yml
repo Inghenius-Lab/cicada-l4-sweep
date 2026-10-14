@@ -3,17 +3,26 @@ on:
   workflow_dispatch:
     inputs:
       shards:
-        description: "Trozos por celda (20 => ~1,2 h por job con 2 nucleos)"
+        description: "Trozos por celda (20 => cada trozo dura ~1 h en un runner)"
         required: false
         default: "20"
       cells:
         description: "Celdas, separadas por coma. Solo las 'pair' tienen barra re-ajustada."
         required: false
         default: "L4-php_mt_scale-pair,L4-php_mt_mod-pair,L4-php_php_scale-pair"
+      smoke:
+        description: "PRUEBA: 1 trozo por celda y rango diminuto. Comprueba que TODOS los jobs van bien en minutos. NO produce datos."
+        type: boolean
+        required: false
+        default: false
 
-# El repo es PUBLICO, asi que los minutos de los runners estandar son gratis
-# (docs.github.com/en/billing/concepts/product-billing/github-actions).
-# El limite duro es 6 h por job, y por eso cada celda va troceada.
+# Repo PUBLICO: los runners estandar no cuestan nada (docs.github.com/en/billing/
+# reference/actions-minute-multipliers). OJO, eso es solo para los runners
+# estandar: "The larger runners are not free for public repositories".
+# Limites verificados en docs.github.com/en/actions/reference/limits:
+#   20 jobs concurrentes (plan Free) · 6 h por job · 256 jobs por matriz
+#   500 MB de artefactos (Free)
+# Por eso las celdas van troceadas y por eso hay modo smoke.
 
 env:
   UPSTREAM: Dukotah/cicada3301
@@ -25,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
+      matriz: ${{ steps.planes.outputs.matriz }}
       shards: ${{ steps.planes.outputs.shards }}
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +47,13 @@ jobs:
           gcc --version | head -1
           python3 -c "import numpy, scipy; print('  numpy', numpy.__version__, ' scipy', scipy.__version__)"
 
+      # DOS VECES QUE ME COSTO ESTO, APUNTADO:
+      #   1) actions/checkout con ref=<SHA> y fetch-depth:1 hace fetch de una ref
+      #      que no existe y muere.
+      #   2) con fetch-depth:0 tampoco: para OTRO repo, checkout solo acepta una
+      #      rama o una etiqueta, y un SHA suelto da
+      #      "A branch or tag with the name 'f08b20b' could not be found".
+      # Asi que el clon va a mano: fetch directo por SHA, que GitHub si admite.
       - name: clon del upstream (solo para leer las fuentes)
         run: |
           set -e
@@ -49,24 +66,31 @@ jobs:
           [ "$(git rev-parse HEAD)" = "${{ env.UPSTREAM_REF }}" ] \
             || { echo "el SHA no coincide"; exit 1; }
 
-      # CONTROL PREVIO. Placement matters: DESPUES del clon, no antes. Ya lo
-      # ejecute antes una vez y fallo banalmente porque upstream/ aun no existia.
-      # Y me costo un intento entero descubrir que faltaba scipy, viniendo solo
-      # DESPUES de dos minutos de Monte Carlo. Esto lo coge al principio.
+      # CONTROL PREVIO. Va DESPUES del clon, no antes: ya lo ejecute antes una
+      # vez y fallo banalmente porque upstream/ aun no existia.
       - name: control previo de la cadena
         run: python3 bin/preflight.py upstream/liber-primus
 
       - name: motor + puertas
         run: bash bin/preparar.sh "$PWD/upstream/liber-primus" "$PWD/panel/panel.npz" "$PWD/work"
 
+      # La matriz se GENERA aqui, a partir de los mismos datos que los planes,
+      # y se pasa al job de barrido. Asi no se puede desincronizar.
       - name: planes troceados
         id: planes
         run: |
-          # 5o argumento = donde viviran las puertas cuando el job de barrido las
-          # lea. Es dist/, NO work/dist: el job corre desde la raiz del repo.
-          python3 bin/planes.py work/dist work/planes "${{ inputs.shards }}" dist ${{ inputs.cells }}
+          set -e
+          if [ "${{ inputs.smoke }}" = "true" ]; then
+            echo "### MODO SMOKE: 1 trozo por celda, 1.500.000 semillas. NO produce datos."
+            python3 bin/planes.py work/dist work/planes 1 dist ${{ inputs.cells }} --max-seeds 1500000
+          else
+            python3 bin/planes.py work/dist work/planes "${{ inputs.shards }}" dist ${{ inputs.cells }}
+          fi
+          N=$(ls work/planes/*.json | grep -v matriz | wc -l)
+          echo "planes: $N"
+          [ "$N" -gt 0 ] || { echo "no se genero ningun plan"; exit 1; }
           echo "shards=${{ inputs.shards }}" >> "$GITHUB_OUTPUT"
-          ls work/planes | wc -l | sed 's/^/planes: /'
+          echo "matriz=$(cat work/planes/matriz.json)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -84,10 +108,17 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      matrix:
-        celda: ["L4-php_mt_scale-pair", "L4-php_mt_mod-pair", "L4-php_php_scale-pair"]
-        trozo: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+      matrix: ${{ fromJSON(needs.preparar.outputs.matriz) }}
     steps:
+      # ⭐ ESTE CHECKOUT ES LO QUE FALTABA Y HACIA FALLAR LOS 5 PRIMEROS JOBS.
+      # "GitHub provisions an isolated virtual machine for each job"
+      # (docs.github.com/en/actions/how-tos/manage-runners/github-hosted-runners/
+      #  use-github-hosted-runners). Sin checkout, el workspace solo tiene lo que
+      # descarga de artefactos, y bin/verifica-barriento.py NO EXISTE: python3
+      # sale con 2 y el paso se pone rojo. Los 5 jobs que fallaron en el run
+      # 38494353906 tenian exactamente ese patron: barriendo ok, verificar FALLA.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with: {name: dist, path: dist}
       - uses: actions/download-artifact@v4
@@ -99,20 +130,16 @@ jobs:
         run: chmod +x dist/grind28
 
       - name: comprobando la puerta de ESTA celda antes de contar nada
-        run: |
-          set -e
-          ./dist/grind28 --gate-check "dist/gates/cellgate_${{ matrix.celda }}.dat"
+        run: ./dist/grind28 --gate-check "dist/gates/cellgate_${{ matrix.celda }}.dat"
 
       - name: barriendo
         run: |
           mkdir -p "run/${{ matrix.celda }}-${{ matrix.trozo }}"
           # SIN TEE. Con `grind28 ... | tee log` el estado que ve `set -e` es el
-          # de tee, que es 0. Un "FATAL: cannot open gate file" salia por stderr,
-          # el job se ponia VERDE y subia un artefacto de 148 bytes sin haber
-          # barriido nada. Eso es peor que fallar: es mentir en verde.
+          # de tee, que es 0, y un "FATAL:" por stderr dejaba el job en VERDE sin
+          # haber barriido nada. 26 jobs asi en el run 38491791257.
           #
-          # --seconds deja que el motor cierre y guarde ANTES del limite de 6 h,
-          # en vez de que lo maten y perder el checkpoint.
+          # --seconds deja que el motor cierre y guarde ANTES del limite de 6 h.
           LOG="sweep-${{ matrix.celda }}-${{ matrix.trozo }}.log"
           rc=0
           ./dist/grind28 \
@@ -122,25 +149,20 @@ jobs:
             --seconds 19000 > "$LOG" 2>&1 || rc=$?
           cat "$LOG"
           echo "grind28 devolvio $rc"
-          # OJO, y esto es sutil: cuando el motor agota --seconds cierra y deja
-          # checkpoint, y aun asi devuelve 1. Medido. Un exit 1 NO es por si
-          # mismo un fallo: hay que mirar si el log dice que cerro limpio. Un
-          # trozo a medio hacer NO es un fallo, es cobertura parcial, y asi se
-          # cuenta; un FATAL o un cuelgue SI son fallo.
+          # OJO: el motor devuelve 1 cuando agota --seconds, aunque cierre con
+          # checkpoint. Un exit 1 no es por si mismo un fallo: hay que mirar el
+          # log. Cobertura parcial no es fallo; un FATAL si.
           if [ "$rc" -ne 0 ]; then
             if grep -q "interrupted (checkpointed" "$LOG"; then
-              echo "::notice::llego al tope de --seconds y cerro con checkpoint. Cobertura parcial de este trozo, no es un fallo."
+              echo "::notice::llego al tope de --seconds y cerro con checkpoint. Cobertura parcial, no es un fallo."
             else
               echo "::error::grind28 devolvio $rc SIN cerrar con checkpoint. Fallo real."
               exit "$rc"
             fi
           fi
 
-      # ESTE PASO ES EL QUE HABRIA ATRAPADO TODO LO DE ARRIBA. Sin el, un job
-      # que no barre nada se reporta verde.
       - name: COMPROBANDO que este job ha barriado de verdad
-        run: |
-          python3 bin/verifica-barriento.py "run/${{ matrix.celda }}-${{ matrix.trozo }}/STATUS.json"
+        run: python3 bin/verifica-barriento.py "run/${{ matrix.celda }}-${{ matrix.trozo }}/STATUS.json"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -155,6 +177,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Tambien faltaba checkout aqui: bin/informe.py no existia en este job.
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         continue-on-error: true
         with: {pattern: "res-*", path: res, merge-multiple: true}
@@ -163,10 +187,10 @@ jobs:
         with: {name: dist, path: dist}
 
       - name: resumen
-        run: python3 bin/informe.py res dist || echo "sin datos que resumir"
-
-      - name: recombinando el mejor pmax por celda
-        run: python3 bin/informe.py res dist --json > informe.json || true
+        run: python3 bin/informe.py res dist
 
       - uses: actions/upload-artifact@v4
-        with: {name: informe, path: informe.json}
+        if: always()
+        with:
+          name: informe
+          path: resultados.json

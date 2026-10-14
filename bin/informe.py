@@ -85,8 +85,10 @@ def main():
     print("    con panelmax_bar(rel, N=cubierto) usando el codigo del upstream.")
     print("    Hasta que ese numero exista, un pmax alto aqui NO es un hallazgo.")
     if AS_JSON:
-        json.dump(salida, open("informe.json", "w"), indent=1)
-        print("\ninforme.json escrito")
+        # El nombre tiene que ser el que el workflow sube como artefacto.
+        with open("resultados.json", "w", encoding="utf-8") as f:
+            json.dump(salida, f, indent=1, ensure_ascii=False)
+        print("\nresultados.json escrito")
 
 
 if __name__ == "__main__":
