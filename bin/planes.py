@@ -1,23 +1,43 @@
 #!/usr/bin/env python3
 """planes.py — trocea las celdas elegidas en un plan por job.
 
-    planes.py <dist/> <salida/> <n-shards> <celda> [<celda> ...]
+    planes.py <dist/> <salida/> <n-shards> <prefijo-gates> <celdas>
+
+`<prefijo-gates>` es DONDE viviran las puertas cuando el job de barrido las lea, y
+se escribe dentro del plan. Va antes de las celdas y separado por posicion a
+proposito: misceldas SI pueden llegar como un argumento con comas (eso hace
+GitHub Actions con inputs.cells), y un prefijo nunca lleva comas. Si intentara
+deducir cual de los dos es, cualquier orden raro lo rompia en silencio.
+
+Importa, y no es cosmetico: si se pasa la ruta de construccion (`work/dist`), el
+plan lleva `work/dist/gates/...` y el job de barrido -que corre desde la raiz del
+repo, donde no existe `work/`- muere con
+
+    FATAL: cannot open gate file work/dist/gates/cellgate_....dat
+
+Que es exactamente lo que paso en el primer intento.
 
 Un plan de GitHub Actions corre UN job = UN lane con su [from, to). Las celdas de
 L4 son 2^32 enteras y el limite de GitHub-hosted es 6 h por job, asi que hay que
-trocear. Con 20 trozos y ~50.000 semillas/s por nucleo, cada trozo cae a ~1,2 h:
-de margen de sobra.
+trocear. Medido: ~24.000-29.000 semillas/s con 2 hilos en un i5-8250U, o sea
+2,49 h por trozo con 20 trozos.
 """
 import json
 import os
 import sys
 
+if len(sys.argv) < 6:
+    raise SystemExit(
+        "uso: planes.py <dist/> <salida/> <n-shards> <prefijo-gates> <celdas>")
+
 DIST, OUT, NSHARDS = sys.argv[1], sys.argv[2], int(sys.argv[3])
-# GitHub Actions pasa inputs.cells como UN argumento con comas, no como varios.
-# Separo por comas aqui para que da igual como llegue.
-CELLS = [c.strip() for arg in sys.argv[4:] for c in arg.split(",") if c.strip()]
+PREFIX_GATES = sys.argv[4]
+CELLS = [c.strip() for arg in sys.argv[5:] for c in arg.split(",") if c.strip()]
+
 if not CELLS:
     raise SystemExit("no se paso ninguna celda")
+if "," in PREFIX_GATES:
+    raise SystemExit(f"el prefijo de las puertas no puede llevar comas: {PREFIX_GATES!r}")
 
 cells = json.load(open(os.path.join(DIST, "queued_cells.json")))
 by_name = {c["lane"]: c for c in cells}
@@ -47,7 +67,7 @@ for lane in CELLS:
         # colisionan aunque los 20 trozos se llamen igual.
         lane_plan["from"], lane_plan["to"] = a, b
         lane_plan["gate"] = os.path.join(
-            DIST, "gates", os.path.basename(c["gate"]))
+            PREFIX_GATES, "gates", os.path.basename(c["gate"]))
         ruta = os.path.join(OUT, f"{lane}__{s}.json")   # SIN ceros: coincide con la matriz
         with open(ruta, "w") as f:
             json.dump([lane_plan], f, indent=1)
@@ -59,3 +79,4 @@ for lane in CELLS:
     sub = [h for h in hechas if h[0] == lane]
     print(f"  {lane:28s} {len(sub):2d} trozos, {sum(h[3]-h[2] for h in sub):,} semillas")
 print(f"  por trozo: ~{hechas[0][3]-hechas[0][2]:,} semillas")
+print(f"  prefijo de las puertas en el plan: {PREFIX_GATES!r}")

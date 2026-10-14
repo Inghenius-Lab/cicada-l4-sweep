@@ -87,15 +87,35 @@ echo "== 5) las 25 puertas ============================================="
 ( cd "$LP/analysis/round28/L4" && mkdir -p gates )
 py "$LP/analysis/round28/L4" make_gates.py | tail -1 | sed 's/^/   /'
 
-echo "== 6) grind28: self-test y las 25 comprobaciones ================="
-( cd "$LP/analysis/round28/L4" \
-  && cp -f "$LP/analysis/round27/P1-engine/engine.dat" \
-            "$LP/analysis/round27/P1-engine/panel_lm.f32" . \
-  && gcc -O3 -march=native -fopenmp -std=gnu17 -ffp-contract=off \
-       -o grind28 grind28.c -lm ) 2>/dev/null \
-  || ( cd "$LP/analysis/round28/L4" \
-       && gcc -O3 -fopenmp -std=gnu17 -ffp-contract=off -o grind28 grind28.c -lm )
-echo "   compilado (sin -march=native si el runner no lo admite)"
+echo "== 6) grind28: compilar PROBANDOLO, y las 25 comprobaciones ======="
+# -march=native en un runner de GitHub es una BOMBA. Al compilar SI funciona
+# (el gcc ve las instrucciones que el host dice tener) pero al EJECUTAR revienta
+# con SIGILL, exit 132, en los runners cuya vCPU no es el modelo que el host
+# declara. Y es INTERMITENTE: de 60 jobs, 34 cayeron con 132 y 26 pasaron la
+# puerta. Un fallback que solo mira si gcc compila no sirve de nada, porque gcc
+# compila bien; lo que hay que comprobar es que el binario CORRE.
+#
+# Por eso aqui cada nivel de ISA se VERIFICA ejecutando el self-test, y se baja
+# al siguiente si el proceso muere con 132 (SIGILL) o 136 (SIGFPE).
+cp -f "$LP/analysis/round27/P1-engine/engine.dat" \
+      "$LP/analysis/round27/P1-engine/panel_lm.f32" "$LP/analysis/round28/L4/"
+
+ISA_USADA=""; OK_ISA=0
+for isa in "-march=native" "-mavx2" "-msse4.2" ""; do
+  if ( cd "$LP/analysis/round28/L4" && gcc -O3 $isa -fopenmp -std=gnu17 \
+        -ffp-contract=off -o grind28 grind28.c -lm ) 2>/dev/null; then
+    rc=0
+    ( cd "$LP/analysis/round28/L4" && ./grind28 --self-test >/dev/null 2>&1 ) || rc=$?
+    if [ "$rc" -ne 132 ] && [ "$rc" -ne 136 ]; then
+      ISA_USADA="${isa:-(sin ISA extra)}"; OK_ISA=1; break
+    fi
+    echo "   ISA '$isa': compila pero MUERE con exit $rc al ejecutar; bajo de nivel"
+  else
+    echo "   ISA '$isa': no compila; bajo de nivel"
+  fi
+done
+[ "$OK_ISA" -eq 1 ] || { echo "   ABORTADO: ningun nivel de ISA arranca el binario"; exit 1; }
+echo "   compilado y PROBADO con ISA: $ISA_USADA"
 
 ST="$( cd "$LP/analysis/round28/L4" && nice -n 15 ./grind28 --self-test 2>&1 | tail -3 )"
 printf '%s\n' "$ST" | sed 's/^/   /'

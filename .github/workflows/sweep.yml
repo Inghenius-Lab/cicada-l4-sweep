@@ -62,7 +62,9 @@ jobs:
       - name: planes troceados
         id: planes
         run: |
-          python3 bin/planes.py work/dist work/planes "${{ inputs.shards }}" ${{ inputs.cells }}
+          # 5o argumento = donde viviran las puertas cuando el job de barrido las
+          # lea. Es dist/, NO work/dist: el job corre desde la raiz del repo.
+          python3 bin/planes.py work/dist work/planes "${{ inputs.shards }}" dist ${{ inputs.cells }}
           echo "shards=${{ inputs.shards }}" >> "$GITHUB_OUTPUT"
           ls work/planes | wc -l | sed 's/^/planes: /'
 
@@ -103,15 +105,42 @@ jobs:
 
       - name: barriendo
         run: |
-          set -e
           mkdir -p "run/${{ matrix.celda }}-${{ matrix.trozo }}"
+          # SIN TEE. Con `grind28 ... | tee log` el estado que ve `set -e` es el
+          # de tee, que es 0. Un "FATAL: cannot open gate file" salia por stderr,
+          # el job se ponia VERDE y subia un artefacto de 148 bytes sin haber
+          # barriido nada. Eso es peor que fallar: es mentir en verde.
+          #
           # --seconds deja que el motor cierre y guarde ANTES del limite de 6 h,
           # en vez de que lo maten y perder el checkpoint.
+          LOG="sweep-${{ matrix.celda }}-${{ matrix.trozo }}.log"
+          rc=0
           ./dist/grind28 \
             --plan "planes/${{ matrix.celda }}__${{ matrix.trozo }}.json" \
             --run-dir "run/${{ matrix.celda }}-${{ matrix.trozo }}" \
             --threads 2 \
-            --seconds 19000 2>&1 | tee "sweep-${{ matrix.celda }}-${{ matrix.trozo }}.log"
+            --seconds 19000 > "$LOG" 2>&1 || rc=$?
+          cat "$LOG"
+          echo "grind28 devolvio $rc"
+          # OJO, y esto es sutil: cuando el motor agota --seconds cierra y deja
+          # checkpoint, y aun asi devuelve 1. Medido. Un exit 1 NO es por si
+          # mismo un fallo: hay que mirar si el log dice que cerro limpio. Un
+          # trozo a medio hacer NO es un fallo, es cobertura parcial, y asi se
+          # cuenta; un FATAL o un cuelgue SI son fallo.
+          if [ "$rc" -ne 0 ]; then
+            if grep -q "interrupted (checkpointed" "$LOG"; then
+              echo "::notice::llego al tope de --seconds y cerro con checkpoint. Cobertura parcial de este trozo, no es un fallo."
+            else
+              echo "::error::grind28 devolvio $rc SIN cerrar con checkpoint. Fallo real."
+              exit "$rc"
+            fi
+          fi
+
+      # ESTE PASO ES EL QUE HABRIA ATRAPADO TODO LO DE ARRIBA. Sin el, un job
+      # que no barre nada se reporta verde.
+      - name: COMPROBANDO que este job ha barriado de verdad
+        run: |
+          python3 bin/verifica-barriento.py "run/${{ matrix.celda }}-${{ matrix.trozo }}/STATUS.json"
 
       - uses: actions/upload-artifact@v4
         if: always()
