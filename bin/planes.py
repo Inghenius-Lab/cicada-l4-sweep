@@ -37,7 +37,14 @@ for lane in CELLS:
         a = lo + s * span
         b = hi if s == NSHARDS - 1 else a + span
         lane_plan = dict(c)
-        lane_plan["lane"] = f"{lane}.s{s:02d}"   # sin '#': va a nombres de fichero
+        # EL NOMBRE DEL LANE NO SE TOCA. grind28 compara strcmp(g.lane,
+        # lanes[i].name) contra lo que declara el gate (grind28.c:1390) y se niega
+        # a barrer si no coincide exactamente. Ponerle un sufijo .s00 al lane
+        # hacia que el gate describiera otra celda y el motor imprimia
+        #   REFUSING lane L4-php_mt_scale-pair.s00: gate file ... describes a
+        #   DIFFERENT cell (L4-php_mt_scale-pair/php_mt_scale/o0)
+        # Cada trozo es su propio run-dir, asi que los ficheros de salida NO
+        # colisionan aunque los 20 trozos se llamen igual.
         lane_plan["from"], lane_plan["to"] = a, b
         lane_plan["gate"] = os.path.join(
             DIST, "gates", os.path.basename(c["gate"]))

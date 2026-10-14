@@ -45,7 +45,9 @@ def main():
 
     por = {}
     for f in filas:
-        base = f["celda"].rsplit(".s", 1)[0]
+        # El lane NO lleva sufijo de trozo: los 20 trozos de una celda se llaman
+        # igual (lo exige el gate) y se agrupan aqui por su nombre.
+        base = f["celda"]
         p = por.setdefault(base, {"c": 0, "best": None, "seed": None, "cand": 0,
                                   "bar": f["claim_bar_2p32"], "rel": f["relacion"],
                                   "t": 0})

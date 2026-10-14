@@ -118,5 +118,38 @@ cp "$LP/analysis/round28/L4/engine.dat" "$LP/analysis/round28/L4/panel_lm.f32" "
 cp "$LP/analysis/round28/L4/queued_cells.json" "$D/"
 mkdir -p "$D/gates"; cp "$LP"/analysis/round28/L4/gates/*.dat "$D/gates/"
 cp "$LP/analysis/round19/I3/calib19.json" "$D/calib19.json"
+
+# --- rutas ABSOLUTAS: el fallo que costo un intento entero de Actions ---------
+# engine.dat guarda QGRAM_PATH y PANEL_PATH con las rutas ABSOLUTAS del clon
+# (grind28.c:353-354 las lee tal cual y las pasa a fopen, lineas 304 y 330).
+# El job de barrido solo recibe dist/, donde esas rutas no existen, y el motor
+# muere con:
+#     FATAL: cannot open quadgram file (QGRAM_PATH in engine.dat)
+#
+# Ademas el fichero de cuadigramas no estaba en dist/ en absoluto.
+#
+# load_panel() NO lee panel.npz: lee panel_lm.f32, 9*24389 float32 (grind28.c:334).
+# panel_lm.f32 ya estaba en dist/, asi que solo faltaba el fichero de
+# cuadigramas. Y se reescriben LAS DOS rutas a dist/<fichero>, relativo a la raiz
+# del repo, que es el directorio de trabajo tanto en local como en el runner.
+cp "$LP/data/english_quadgrams.txt" "$D/english_quadgrams.txt"
+python3 - "$D" <<'PYEOF'
+import sys, pathlib
+d = pathlib.Path(sys.argv[1])
+p = d / "engine.dat"
+t = p.read_text(encoding="utf-8", errors="surrogateescape")
+for key, name in (("QGRAM_PATH", "english_quadgrams.txt"),
+                  ("PANEL_PATH",  "panel_lm.f32")):
+    old = None
+    for line in t.split("\n"):
+        if line.startswith(key + " "):
+            old = line.split(" ", 1)[1].strip()
+            break
+    t = t.replace(f"{key} {old}", f"{key} dist/{name}")
+    print(f"   {key}: {old}")
+    print(f"        -> dist/{name}")
+p.write_text(t, encoding="utf-8", errors="surrogateescape")
+PYEOF
+
 du -sh "$D" | sed 's/^/   /'
 echo "LISTO"
